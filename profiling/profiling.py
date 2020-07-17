@@ -1,7 +1,7 @@
 """Profiling
 
 Usage:
-  profiling --data=<dataset> --num=<num> --mem=<mem> --cpu=<cpu> (pandas|dataprep)
+  profiling --data=<dataset> --row=<row> --col=<col> --mem=<mem> --cpu=<cpu> --mode=<mode> [--partition=<part>] (pandas|dataprep)
 
 Options:
   -h --help    Show this screen.
@@ -11,12 +11,15 @@ from logging import getLogger
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import time
-from itertools import product
+from typing import Optional
+from gc import collect
 
 import numpy as np
 import pandas as pd
+import dask.dataframe as dd
 from contexttimer import Timer
 from docopt import docopt
+import missingno
 
 
 logger = getLogger(__name__)
@@ -34,16 +37,36 @@ def main() -> None:
     print(args)
 
     dataset = args["--data"]
-    N = int(args["--num"])
+    N, M = int(args["--row"]), int(args["--col"])
+    mode = args["--mode"]
+    partition = args.get("--partition")
 
-    df = create_dataset(dataset, N)
+    df = create_dataset(dataset, N, M)
+    df.reset_index(inplace=True)
     data_in_mem = df.memory_usage(deep=True).sum()
 
+    fname = f"{dataset}_{N}_{M}.parquet"
+    if partition is not None:
+        df["index"] = df["index"] % int(partition)
+        df.to_parquet(fname, partition_cols=["index"])
+    else:
+        df.to_parquet(fname)
+
+    # release the memory
+    del df
+    collect()
+
+    logger.info("Dataset dumped")
+
+    results = []
+
     if args["pandas"]:
+        logging.info("Benchmarking Pandas-Profiling")
         from pandas_profiling import ProfileReport
 
         with TemporaryDirectory() as tdir:
             with Timer() as timer:
+                df = pd.read_parquet(fname)
                 profile = ProfileReport(
                     df,
                     title="Pandas Profiling Report",
@@ -52,64 +75,98 @@ def main() -> None:
                 profile.to_file(output_file=f"{Path(__file__).parent}/a_report.html")
 
         print(f"Pandas Profiling Elapsed: {timer.elapsed}s")
-        print(
+        results.append(
             {
                 "Mem": args["--mem"],
                 "CPU": args["--cpu"],
                 "Library": "pandas-profiling",
                 "Dataset": dataset,
-                "Size": N,
+                "Row": N,
+                "Col": M,
                 "MSize": data_in_mem,
                 "Elapsed": timer.elapsed,
             }
         )
     else:
-        from dataprep.eda import plot, plot_correlation, plot_missing
+        from dataprep.eda.missing import plot_missing as plot_missing_new
+        from dataprep.eda.missing2 import plot_missing as plot_missing_old
 
         with TemporaryDirectory() as tdir:
-            logger.info(f"Computing plot")
-            then = time()
-            plot(df).save(f"{tdir}/report1.html")
-            plotdf_t = time() - then
+            with Timer() as timer:
+                logger.info(f"Computing plot_missing_new")
+                if mode == "dask":
+                    df = dd.read_parquet(fname)
+                elif mode == "pandas":
+                    df = pd.read_parquet(fname)
 
-            # then = time()
-            # for x, y in list(product(df.columns, df.columns)):
-            #     if x != y:
-            #         logger.info(f"Computing plotxy {x} {y}")
-            #         plot(df, x=x, y=y).save(f"{tdir}/report1.html")
-            # plotdfxy_t = time() - then
+                plot_missing_new(df, bins=100).save(f"{tdir}/report3.html")
+        print(f"missing_new Elapsed: {timer.elapsed}s")
+        results.append(
+            {
+                "Mem": args["--mem"],
+                "CPU": args["--cpu"],
+                "Mode": mode,
+                "Dataset": dataset,
+                "Partition": partition,
+                "Row": N,
+                "Col": M,
+                "MSize": data_in_mem,
+                "Elapsed": timer.elapsed,
+                "Func": "new",
+            }
+        )
 
-            then = time()
-            logger.info(f"Computing plot_correlation")
-            plot_correlation(df).save(f"{tdir}/report2.html")
-            plotcorr_t = time() - then
+        with TemporaryDirectory() as tdir:
+            with Timer() as timer:
+                logger.info(f"Computing plot_missing_old")
+                if mode == "dask":
+                    df = dd.read_parquet(fname)
+                elif mode == "pandas":
+                    df = pd.read_parquet(fname)
 
-            then = time()
-            logger.info(f"Computing plot_missing")
-            plot_missing(df, bins=100).save(f"{tdir}/report3.html")
-            plotmissing_t = time() - then
+                plot_missing_old(df, bins=100).save(f"{tdir}/report3.html")
 
-            elapsed = plotdf_t + plotcorr_t + plotmissing_t
+        print(f"missing_old Elapsed: {timer.elapsed}s")
+        results.append(
+            {
+                "Mem": args["--mem"],
+                "CPU": args["--cpu"],
+                "Mode": mode,
+                "Dataset": dataset,
+                "Partition": partition,
+                "Row": N,
+                "Col": M,
+                "MSize": data_in_mem,
+                "Elapsed": timer.elapsed,
+                "Func": "old",
+            }
+        )
 
-            print(
-                f"Dataprep Elapsed: {elapsed}s, breaking down: {plotdf_t}, {plotcorr_t}, {plotmissing_t}"
-            )
+        with TemporaryDirectory() as tdir:
+            with Timer() as timer:
+                logger.info(f"Computing plot_missing_new")
+                df = pd.read_parquet(fname)
+                missingno.matrix(df)
+                missingno.heatmap(df)
+                missingno.bar(df)
 
-            print(
-                {
-                    "Mem": args["--mem"],
-                    "CPU": args["--cpu"],
-                    "Library": "dataprep",
-                    "Dataset": dataset,
-                    "Size": N,
-                    "MSize": data_in_mem,
-                    "Elapsed": {
-                        "plot": plotdf_t,
-                        "plot_correlation": plotcorr_t,
-                        "plot_missing": plotmissing_t,
-                    },
-                }
-            )
+        print(f"Missingno Elapsed: {timer.elapsed}s")
+        results.append(
+            {
+                "Mem": args["--mem"],
+                "CPU": args["--cpu"],
+                "Mode": mode,
+                "Dataset": dataset,
+                "Partition": partition,
+                "Row": N,
+                "Col": M,
+                "MSize": data_in_mem,
+                "Elapsed": timer.elapsed,
+                "Func": "missingno",
+            }
+        )
+
+        print(dumps(results, cls=NumpyEncoder))
 
 
 def create_dataset(dataset: str, n: int) -> pd.DataFrame:
