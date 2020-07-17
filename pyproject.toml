@@ -71,6 +71,7 @@ sphinx-autodoc-typehints = "^1.10.3"
 ipython = "^7.13.0"
 rope = "^0.16.0"
 seaborn = "^0.10.1"
+python-snappy = "^0.5.4"
 
 [tool.black]
 line-length = 88

@@ -1130,6 +1130,14 @@ version = "2.8.1"
 six = ">=1.5"
 
 [[package]]
+category = "dev"
+description = "Python library for the snappy compression library from Google"
+name = "python-snappy"
+optional = false
+python-versions = "*"
+version = "0.5.4"
+
+[[package]]
 category = "main"
 description = "World timezone definitions, modern and historical"
 name = "pytz"
@@ -1577,7 +1585,7 @@ docs = ["sphinx", "jaraco.packaging (>=3.2)", "rst.linker (>=1.9)"]
 testing = ["jaraco.itertools", "func-timeout"]
 
 [metadata]
-content-hash = "ba5c8374407fdd7e192c9f6acd7c8d8a691c0fcd5da846cf9c02514ba137701d"
+content-hash = "45fc7603ad9a459165be5db526d44fd55016ebafa4a1e19f200d488103d4ba1f"
 python-versions = "^3.6.1"
 
 [metadata.files]
@@ -2166,6 +2174,10 @@ pytest-cov = [
 python-dateutil = [
     {file = "python-dateutil-2.8.1.tar.gz", hash = "sha256:73ebfe9dbf22e832286dafa60473e4cd239f8592f699aa5adaf10050e6e1823c"},
     {file = "python_dateutil-2.8.1-py2.py3-none-any.whl", hash = "sha256:75bb3f31ea686f1197762692a9ee6a7550b59fc6ca3a1f4b5d7e32fb98e2da2a"},
+]
+python-snappy = [
+    {file = "python-snappy-0.5.4.tar.gz", hash = "sha256:d9c26532cfa510f45e8d135cde140e8a5603d3fb254cfec273ebc0ecf9f668e2"},
+    {file = "python_snappy-0.5.4-cp36-cp36m-macosx_10_7_x86_64.whl", hash = "sha256:9c0ba725755b749ef9b03f6ed7582cefb957c0d9f6f064a7c4314148a9dbdb61"},
 ]
 pytz = [
     {file = "pytz-2020.1-py2.py3-none-any.whl", hash = "sha256:a494d53b6d39c3c6e44c3bec237336e14305e4f29bbf800b599253057fbb79ed"},
