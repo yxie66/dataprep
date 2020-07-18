@@ -41,7 +41,7 @@ def main() -> None:
     mode = args["--mode"]
     partition = args.get("--partition")
 
-    df = create_dataset(dataset, N, M)
+    df = create_dataset(dataset, N)
     df.reset_index(inplace=True)
     data_in_mem = df.memory_usage(deep=True).sum()
 

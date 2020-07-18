@@ -8,7 +8,7 @@ with open("profiling-result-missing.json") as f:
     lines = f.readlines()
 rs = [r for line in lines for r in loads(line)]
 df = pd.DataFrame(rs)
-
+df["DVM"] = df["MSize"] / (df["Mem"].str.strip("G").apply(int) * 1024 * 1024 * 1024)
 
 ##
 pdf = df.pivot_table(
@@ -19,7 +19,7 @@ pdf = df.pivot_table(
 
 ##
 alt.Chart(
-    df[df.Mem == "2G"], title="Plot Missing Comparason: 2G Mem/8 CPU/16 Data Partition"
+    df[df.Mem == "4G"], title="Plot Missing Comparason: 2G Mem/8 CPU/16 Data Partition"
 ).mark_bar().encode(
     y="Func:N",
     x=alt.X("Elapsed", title="Elapsed (s)"),
@@ -29,6 +29,16 @@ alt.Chart(
     column=alt.Column("Mode:O", title="Data Loading Mode"),
 ).resolve_scale(
     x="independent"
+)
+
+
+##
+alt.Chart(df, title="Plot Missing Comparison").mark_line(point=True).encode(
+    y=alt.Y("Elapsed", title="Elapsed (s)"),
+    x=alt.X("DVM", title="Dataset Size / Memory Size"),
+    color="Func:N",
+    tooltip="Elapsed",
+    column=alt.Column("Mode:O", title="Data Loading Mode"),
 )
 
 
