@@ -176,6 +176,56 @@ def _format_axis(fig: Figure, minv: int, maxv: int, axis: str) -> None:
         fig.yaxis.major_label_standoff = 5
 
 
+def _format_bin_intervals(bins_arr: np.ndarray) -> List[str]:
+    """
+    Auxillary function to format bin intervals in a histogram
+    """
+    bins_arr = np.round(bins_arr, 3)
+    bins_arr = [int(val) if float(val).is_integer() else val for val in bins_arr]
+    intervals = [
+        f"[{bins_arr[i]}, {bins_arr[i + 1]})" for i in range(len(bins_arr) - 2)
+    ]
+    intervals.append(f"[{bins_arr[-2]},{bins_arr[-1]}]")
+    return intervals
+
+
+def _format_values(key: str, value: Any) -> str:
+
+    if not isinstance(value, (int, float)):
+        # if value is a time
+        return str(value)
+
+    if "Memory" in key:
+        # for memory usage
+        ind = 0
+        unit = dict(enumerate(["B", "KB", "MB", "GB", "TB"], 0))
+        while value > 1024:
+            value /= 1024
+            ind += 1
+        return f"{value:.1f} {unit[ind]}"
+
+    if (value * 10) % 10 == 0:
+        # if value is int but in a float form with 0 at last digit
+        value = int(value)
+        if abs(value) >= 1000000:
+            return f"{value:.5g}"
+    elif abs(value) >= 1000000 or abs(value) < 0.001:
+        value = f"{value:.5g}"
+    elif abs(value) >= 1:
+        # eliminate trailing zeros
+        pre_value = float(f"{value:.4f}")
+        value = int(pre_value) if (pre_value * 10) % 10 == 0 else pre_value
+    elif 0.001 <= abs(value) < 1:
+        value = f"{value:.4g}"
+    else:
+        value = str(value)
+
+    if "%" in key:
+        # for percentage, only use digits before notation sign for extreme small number
+        value = f"{float(value):.1%}"
+    return str(value)
+
+
 def _create_table_row(key: str, value: Union[str, int], highlight: bool = False) -> str:
     """
     Create table row for stats panel
@@ -279,8 +329,9 @@ def wordfreq_viz(
 
 def bar_viz(
     df: pd.DataFrame,
-    total_grps: int,
-    miss_pct: float,
+    ttl_grps: int,
+    nmissing: int,
+    nrows: int,
     col: str,
     yscale: str,
     plot_width: int,
@@ -291,13 +342,16 @@ def bar_viz(
     Render a bar chart
     """
     # pylint: disable=too-many-arguments
+    df["pct"] = df[col] / nrows * 100
+    miss_pct = np.round(nmissing / nrows * 100, 1)
+
     title = f"{col} ({miss_pct}% missing)" if miss_pct > 0 else f"{col}"
-    tooltips = [(f"{col}", "@col"), ("Count", "@cnt"), ("Percent", "@pct{0.2f}%")]
+    tooltips = [(f"{col}", "@index"), ("Count", f"@{col}"), ("Percent", "@pct{0.2f}%")]
     if show_yticks:
         if len(df) > 10:
             plot_width = 28 * len(df)
     fig = Figure(
-        x_range=list(df["col"]),
+        x_range=list(df.index),
         title=title,
         plot_width=plot_width,
         plot_height=plot_height,
@@ -306,11 +360,11 @@ def bar_viz(
         toolbar_location=None,
         tooltips=tooltips,
     )
-    fig.vbar(x="col", width=0.9, top="cnt", bottom=0.01, source=df)
+    fig.vbar(x="index", width=0.9, top=col, bottom=0.01, source=df)
     tweak_figure(fig, "bar", show_yticks)
     fig.yaxis.axis_label = "Count"
-    if total_grps > len(df):
-        fig.xaxis.axis_label = f"Top {len(df)} of {total_grps} {col}"
+    if ttl_grps > len(df):
+        fig.xaxis.axis_label = f"Top {len(df)} of {ttl_grps} {col}"
         fig.xaxis.axis_label_standoff = 0
     if show_yticks and yscale == "linear":
         _format_axis(fig, 0, df["cnt"].max(), "y")
@@ -361,8 +415,9 @@ def pie_viz(
 
 
 def hist_viz(
-    df: pd.DataFrame,
-    miss_pct: float,
+    hist: Tuple[np.ndarray, np.ndarray],
+    nmissing: int,
+    nrows: int,
     col: str,
     yscale: str,
     plot_width: int,
@@ -372,7 +427,20 @@ def hist_viz(
     """
     Render a histogram
     """
-    # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-arguments,too-many-locals
+    counts, bins = hist
+    intvls = _format_bin_intervals(bins)
+    df = pd.DataFrame(
+        dict(
+            intvls=intvls,
+            left=bins[:-1],
+            right=bins[1:],
+            freq=counts,
+            pct=counts / nrows * 100,
+        )
+    )
+    miss_pct = np.round(nmissing / nrows * 100, 1)
+
     title = f"{col} ({miss_pct}% missing)" if miss_pct > 0 else f"{col}"
     tooltips = [("Bin", "@intvls"), ("Frequency", "@freq"), ("Percent", "@pct{0.2f}%")]
     fig = Figure(
@@ -1097,17 +1165,36 @@ def dt_multiline_viz(
 
 
 def stats_viz(
-    data: Tuple[Dict[str, str], Dict[str, int]], plot_width: int, plot_height: int
+    stats: Dict[str, Union[int, float, Dict[str, int]]],
+    nrows,
+    plot_width: int,
+    plot_height: int,
 ) -> Div:
     """
     Render statistics information for grid plots
     """
+    # pylint: disable=too-many-locals
+    ncols, not_null_cell_cnt, nrows_wo_dups, memory_usage, dtypes_cnt = stats.values()
+    total_cells = nrows * ncols
+
+    data = {
+        "Number of Variables": ncols,
+        "Number of Observations": nrows,
+        "Missing Cells": float(total_cells - not_null_cell_cnt),
+        "Missing Cells (%)": 1 - (not_null_cell_cnt / total_cells),
+        "Duplicate Rows": nrows - nrows_wo_dups,
+        "Duplicate Rows (%)": 1 - (nrows_wo_dups / nrows),
+        "Total Size in Memory": float(memory_usage),
+        "Average Record Size in Memory": memory_usage / nrows,
+    }
+    data = {k: _format_values(k, v) for k, v in data.items()}
+
     ov_content = '<h3 style="text-align:center;">Dataset Statistics</h3>'
     type_content = '<h3 style="text-align:center;">Variable Types</h3>'
-    for key, value in data[0].items():
+    for key, value in data.items():
         value = _sci_notation_superscript(value)
         ov_content += _create_table_row(key, value)
-    for key, value in data[1].items():  # type: ignore
+    for key, value in dtypes_cnt.items():  # type: ignore
         type_content += _create_table_row(key, value)
 
     ov_content = f"""
@@ -1321,13 +1408,15 @@ def render_basic(
     Render plots and dataset stats from plot(df)
     """  # pylint: disable=too-many-locals
     figs = list()
+    nrows = itmdt["nrows"]
     for col, dtype, data in itmdt["data"]:
         if is_dtype(dtype, Nominal()):
-            df, total_grps, miss_pct = data
+            df, ttl_grps, nmissing = data
             fig = bar_viz(
-                df[:-1],
-                total_grps,
-                miss_pct,
+                df,
+                ttl_grps,
+                nmissing,
+                nrows,
                 col,
                 yscale,
                 plot_width,
@@ -1336,8 +1425,10 @@ def render_basic(
             )
             figs.append(fig)
         elif is_dtype(dtype, Continuous()):
-            df, miss_pct = data
-            fig = hist_viz(df, miss_pct, col, yscale, plot_width, plot_height, False)
+            hist, nmissing = data
+            fig = hist_viz(
+                hist, nmissing, nrows, col, yscale, plot_width, plot_height, False
+            )
             figs.append(fig)
         elif is_dtype(dtype, DateTime()):
             df, timeunit, miss_pct = data
@@ -1347,12 +1438,11 @@ def render_basic(
             figs.append(fig)
 
     stats_section = stats_viz(
-        itmdt["statsdata"], plot_width=plot_width, plot_height=plot_height
+        itmdt["stats"], nrows, plot_width=plot_width, plot_height=plot_height
     )
     plot_section = gridplot(
         children=figs, sizing_mode=None, toolbar_location=None, ncols=3,
     )
-
     button = Button(
         label="Show Stats Info", width=plot_width * 3, button_type="primary"
     )

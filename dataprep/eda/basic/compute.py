@@ -207,32 +207,34 @@ def compute_overview(
         dtype = {"a": Continuous(), "b": "nominal"}
         or dtype = Continuous() or dtype = "Continuous" or dtype = Continuous()
     """
-
     datas: List[Any] = []
-    counter = {"Categorical": 0, "Numerical": 0, "Datetime": 0}
+    dtype_cnts: Dict[str, int] = {}
     col_names_dtypes: List[Tuple[str, DType]] = []
     for column in df.columns:
         column_dtype = detect_dtype(df[column], dtype)
         if is_dtype(column_dtype, Nominal()):
             # bar chart
-            datas.append(dask.delayed(calc_bar_pie)(df[column], ngroups, largest))
+            datas.append(calc_bar_pie(df[column], ngroups, largest))
             col_names_dtypes.append((column, Nominal()))
-            counter["Categorical"] += 1
+            dtype_cnts["Categorical"] = dtype_cnts.get("Categorical", 0) + 1
         elif is_dtype(column_dtype, Continuous()):
             # histogram
-            datas.append(dask.delayed(calc_hist)(df[column], bins))
+            datas.append(calc_hist(df[column], bins))
             col_names_dtypes.append((column, Continuous()))
-            counter["Numerical"] += 1
+            dtype_cnts["Numerical"] = dtype_cnts.get("Numerical", 0) + 1
         elif is_dtype(column_dtype, DateTime()):
             datas.append(dask.delayed(calc_line_dt)(df[[column]], timeunit))
             col_names_dtypes.append((column, DateTime()))
-            counter["Datetime"] += 1
+            dtype_cnts["DateTime"] = dtype_cnts.get("DateTime", 0) + 1
         else:
             raise UnreachableError
-    datas.append(dask.delayed(calc_stats)(df, counter))
+    datas.append(calc_stats(df, dtype_cnts))
+    datas.append(df.shape[0])
     datas = dask.compute(*datas)
-    data = [(col, dtp, dat) for (col, dtp), dat in zip(col_names_dtypes, datas[:-1])]
-    return Intermediate(data=data, statsdata=datas[-1], visual_type="basic_grid")
+    data = [(col, dtp, dat) for (col, dtp), dat in zip(col_names_dtypes, datas[:-2])]
+    return Intermediate(
+        data=data, nrows=datas[-1], stats=datas[-2], visual_type="basic_grid"
+    )
 
 
 def compute_univariate(
@@ -800,7 +802,7 @@ def calc_stacked_dt(
 
 def calc_bar_pie(
     srs: dd.Series, ngroups: int, largest: bool
-) -> Tuple[pd.DataFrame, int, float]:
+) -> Tuple[dd.DataFrame, dd.core.Scalar, dd.core.Scalar]:
     """
     Calculates the group counts given a series.
     Parameters
@@ -818,23 +820,16 @@ def calc_bar_pie(
         A dataframe of the group counts, the total count of groups,
         and the percent of missing values
     """
-    miss_pct = round(srs.isna().sum() / len(srs) * 100, 1)
-    try:
-        grp_srs = srs.groupby(srs).size()
-    except TypeError:
-        srs = srs.astype(str)
-        grp_srs = srs.groupby(srs).size()
-    # select largest or smallest groups
-    smp_srs = grp_srs.nlargest(n=ngroups) if largest else grp_srs.nsmallest(n=ngroups)
-    df = smp_srs.to_frame().rename(columns={srs.name: "cnt"}).reset_index()
-    # add a row containing the sum of the other groups
-    other_cnt = len(srs) - df["cnt"].sum()
-    df = df.append(pd.DataFrame({srs.name: ["Others"], "cnt": [other_cnt]}))
-    # add a column containing the percent of count in each group
-    df["pct"] = df["cnt"] / len(srs) * 100
-    df.columns = ["col", "cnt", "pct"]
-    df["col"] = df["col"].astype(str)  # needed when numeric is cast as categorical
-    return df, len(grp_srs), miss_pct
+    # count of missing values in this column
+    nmissing = srs.isna().sum()
+    # counts of unique values, excludes null/NA
+    grps = srs.value_counts(sort=False)
+    # total number of groups
+    ttl_grps = grps.shape[0]
+    # select the largest or smallest groups
+    grps = grps.nlargest(ngroups) if largest else grps.nsmallest(ngroups)
+
+    return grps.to_frame(), ttl_grps, nmissing
 
 
 def tokenize_text(df: dd.DataFrame, x: str) -> dd.DataFrame:
@@ -907,7 +902,9 @@ def cal_word_freq(
     return total_freq, top_freq
 
 
-def calc_hist(srs: dd.Series, bins: int,) -> Tuple[pd.DataFrame, float]:
+def calc_hist(
+    srs: dd.Series, bins: int
+) -> Tuple[Tuple[da.core.Array, da.core.Array], dd.core.Scalar]:
     """
     Calculate a histogram over a given series.
     Parameters
@@ -921,22 +918,14 @@ def calc_hist(srs: dd.Series, bins: int,) -> Tuple[pd.DataFrame, float]:
     Tuple[pd.DataFrame, float]:
         The histogram in a dataframe and the percent of missing values
     """
-    miss_pct = round(srs.isna().sum() / len(srs) * 100, 1)
-    data = drop_null(srs).values
-    if len(data) == 0:  # all values in column are missing
-        return pd.DataFrame({"left": [], "right": [], "freq": []}), miss_pct
-    hist_arr, bins_arr = np.histogram(data, range=[data.min(), data.max()], bins=bins)
-    intvls = _format_bin_intervals(bins_arr)
-    hist_df = pd.DataFrame(
-        {
-            "intvls": intvls,
-            "left": bins_arr[:-1],
-            "right": bins_arr[1:],
-            "freq": hist_arr,
-            "pct": hist_arr / len(srs) * 100,
-        }
-    )
-    return hist_df, miss_pct
+    # count of missing values in this column
+    nmissing = srs.isnull().sum()
+    # drop the null values and convert to a dask array
+    arr = drop_null(srs).to_dask_array(lengths=True)
+    # compute the histogram data
+    hist = da.histogram(arr, bins=bins, range=[arr.min(), arr.max()])
+
+    return hist, nmissing
 
 
 def calc_hist_kde(
@@ -1442,8 +1431,8 @@ def calc_stats_dt(srs: dd.Series) -> Tuple[Dict[str, str]]:
 
 
 def calc_stats(
-    df: Union[dd.DataFrame, pd.DataFrame], counter: Dict[str, int]
-) -> Tuple[Dict[str, str], Dict[str, int]]:
+    df: dd.DataFrame, dtype_cnts: Dict[str, int]
+) -> Dict[str, Union[int, dd.core.Scalar, Dict[str, int]]]:
     """
     Calculate stats from a DataFrame
 
@@ -1458,29 +1447,14 @@ def calc_stats(
     Tuple[Dict[str, str], Dict[str, int]]
         Dictionary that contains Overview and Variable Types
     """
-    dim = df.shape
-    total_cell = dim[0] * dim[1]
-    nonan_cell = df.count().sum()
-    memory_usage = float(df.memory_usage().sum())
-    try:  # for unhashable data types
-        dup_rows = len(df.drop_duplicates())
-    except TypeError:
-        df = df.astype(str)
-        dup_rows = len(df.drop_duplicates())
-    overview_dict = {
-        "Number of Variables": dim[1],
-        "Number of Observations": dim[0],
-        "Missing Cells": float(total_cell - nonan_cell),
-        "Missing Cells (%)": 1 - (nonan_cell / total_cell),
-        "Duplicate Rows": dim[0] - dup_rows,
-        "Duplicate Rows (%)": 1 - (dup_rows / dim[0]),
-        "Total Size in Memory": memory_usage,
-        "Average Record Size in Memory": memory_usage / dim[0],
-    }
-    return (
-        {k: _format_values(k, v) for k, v in overview_dict.items()},
-        {k: v for k, v in counter.items() if v != 0},
+    stats = dict(
+        ncols=df.shape[1],
+        not_null_cell_cnt=df.count().sum(),
+        nrows_wo_dups=df.drop_duplicates().shape[0],
+        memory_usage=df.memory_usage().sum(),
+        dtype_cnts=dtype_cnts,
     )
+    return stats
 
 
 def _calc_box_stats(grp_srs: dd.Series, grp: str, dlyd: bool = False) -> pd.DataFrame:
