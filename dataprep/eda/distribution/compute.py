@@ -228,12 +228,16 @@ def compute_overview(
             dtype_cnts["DateTime"] = dtype_cnts.get("DateTime", 0) + 1
         else:
             raise UnreachableError
-    datas.append(calc_stats(df, dtype_cnts))
-    datas.append(df.shape[0])
+    datas = {"datas": datas, "stats": calc_stats(df, dtype_cnts), "nrows": df.shape[0]}
     datas = dask.compute(*datas)
-    data = [(col, dtp, dat) for (col, dtp), dat in zip(col_names_dtypes, datas[:-2])]
+    data = [
+        (col, dtp, dat) for (col, dtp), dat in zip(col_names_dtypes, datas["datas"])
+    ]
     return Intermediate(
-        data=data, nrows=datas[-1], stats=datas[-2], visual_type="basic_grid"
+        data=data,
+        nrows=datas["nrows"],
+        stats=datas["stats"],
+        visual_type="distribution_grid",
     )
 
 
@@ -805,6 +809,7 @@ def calc_bar_pie(
 ) -> Tuple[dd.DataFrame, dd.core.Scalar, dd.core.Scalar]:
     """
     Calculates the group counts given a series.
+
     Parameters
     ----------
     srs
@@ -814,6 +819,7 @@ def calc_bar_pie(
     largest
         If true, show the groups with the largest count,
         else show the groups with the smallest count
+
     Returns
     -------
     Tuple[pd.DataFrame, float]

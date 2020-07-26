@@ -1401,7 +1401,7 @@ def stats_viz_dt(
     return Panel(child=div, title="Stats")
 
 
-def render_basic(
+def render_distribution_grid(
     itmdt: Intermediate, yscale: str, plot_width: int, plot_height: int
 ) -> Box:
     """
@@ -1774,9 +1774,9 @@ def render(
     plot_width_wide: int, default 972
         The width of the wide plots
     """
-    # pylint: disable=too-many-arguments
-    if itmdt.visual_type == "basic_grid":
-        visual_elem = render_basic(itmdt, yscale, plot_width_sml, plot_height_sml)
+
+    if itmdt.visual_type == "distribution_grid":
+        visual_elem = render_distribution_grid(itmdt, yscale, plot_width_sml, plot_height_sml)
     elif itmdt.visual_type == "categorical_column":
         visual_elem = render_cat(itmdt, yscale, plot_width_lrg, plot_height_lrg)
     elif itmdt.visual_type == "numerical_column":
