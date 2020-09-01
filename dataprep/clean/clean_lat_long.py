@@ -8,6 +8,8 @@ import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 
+from ..eda.utils import to_dask
+
 PATTERN = re.compile(
     r"""
     .*?
@@ -39,8 +41,9 @@ def clean_lat_long(
     column: str,
     output_format: str = "dd",
     split: bool = False,
+    inplace: bool = False,
     hor_coord: str = "lat",
-) -> Union[pd.DataFrame, dd.DataFrame]:
+) -> pd.DataFrame:
     """
     This function cleans latitdinal and longitudinal coordinates
 
@@ -56,22 +59,33 @@ def clean_lat_long(
         degrees minutes seconds ("dms")
     split
         if True, split a column containing latitudinal and longitudinal
-        coordinates into one column for latitude and one for longitude
+        coordinates into one column for latitude and one column for longitude
+    inplace
+        If True, delete the given column with dirty data, else, create a new
+        column with cleaned data.
     hor_coord
         If a column of decimals, this parameter defines the horizontal axis.
         Can be "lat" for latitude, or "long" for longitude.
     """
 
-    if isinstance(df, dd.DataFrame):
-        df = df.apply(
-            lambda row: format_lat_long(row, column, output_format, split, hor_coord),
-            axis=1,
-            meta=df,
-        ).compute()
-    elif isinstance(df, pd.DataFrame):
-        df = df.apply(
-            lambda row: format_lat_long(row, column, output_format, split, hor_coord), axis=1
-        )
+    df = to_dask(df)
+    meta = df.dtypes.to_dict()
+    if split:
+        if output_format == "dd":
+            meta.update(zip(("latitude", "longitude"), (float, float)))
+        else:
+            meta.update(zip(("latitude", "longitude"), (str, str)))
+    else:
+        meta[f"{column}_clean"] = float if output_format == "dd" else str
+
+    df = df.apply(format_lat_long, 
+        args=(column, output_format, split, hor_coord),
+        axis=1,
+        meta=meta,
+    ).compute()
+
+    if inplace:
+        df = df.drop(columns=[column])
 
     return df
 
